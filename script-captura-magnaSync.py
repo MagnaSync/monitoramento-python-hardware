@@ -12,10 +12,10 @@ limite_atencao = 70
 limite_alerta = 90
 
 conexao = connection.MySQLConnection(
-    host="localhost",
-    user="aluno2",
-    password="sptech",
-    database="magnasync_1",
+    host="",
+    user="",
+    password="",
+    database="",
 )
 cursor = conexao.cursor()
 
