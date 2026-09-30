@@ -4,7 +4,7 @@ from datetime import datetime
 import psutil as p
 from mysql.connector import connection
 
-ID_EQUIPAMENTO = 1        # equipamento criado no script SQL
+ID_EQUIPAMENTO = 1       # equipamento criado no script SQL
 INTERVALO_CAPTURA = 3     # segundos entre capturas  
 GB = 1024 ** 3
 
@@ -12,10 +12,10 @@ limite_atencao = 70
 limite_alerta = 90
 
 conexao = connection.MySQLConnection(
-    host="",
-    user="",
-    password="",
-    database="",
+    host="localhost",
+    user="aluno2",
+    password="sptech",
+    database="magnasync",
 )
 cursor = conexao.cursor()
 
