@@ -1,15 +1,14 @@
 import time as t
-from datetime import datetime
 
 import psutil as p
 from mysql.connector import connection
 
-ID_EQUIPAMENTO = 1       # equipamento criado no script SQL
-INTERVALO_CAPTURA = 3     # segundos entre capturas  
+INTERVALO_CAPTURA = 3     # segundos entre leituras
 GB = 1024 ** 3
+MB = 1000000
 
-limite_atencao = 70
-limite_alerta = 90
+# funções do psutil que precisam de um argumento para funcionar
+ARGUMENTOS = {"disk_usage": "/", "cpu_percent": 1}
 
 conexao = connection.MySQLConnection(
     host="localhost",
@@ -17,207 +16,249 @@ conexao = connection.MySQLConnection(
     password="sptech",
     database="magnasync",
 )
+conexao.autocommit = True   # assim o menu enxerga o que for inserido no banco sem reiniciar
 cursor = conexao.cursor()
 
-# DISCRETIZAÇÃO
+# Mac Adress
 
-def classificar_percentual(valor, limiteAtencao=limite_atencao, limiteAlerta=limite_alerta):
-    if valor >= limiteAlerta:
-        return "Alerta!"
-    elif valor >= limiteAtencao:
-        return "Atenção"
-    else:
-        return "Normal"
+def pegar_mac():
+    stats = p.net_if_stats()
+    for interface, enderecos in p.net_if_addrs().items():
+        if interface not in stats or not stats[interface].isup:
+            continue
+        for endereco in enderecos:
+            if endereco.family == p.AF_LINK:
+                so_digitos = endereco.address.replace("-", "").replace(":", "")
+                if so_digitos != "" and so_digitos != "000000000000":
+                    return endereco.address.replace("-", ":").upper()
+    return None
 
 
-def pior_status(lista_status):
-    pior_componente = {"Normal": 0, "Atenção": 1, "Alerta!": 2}
-    return max(lista_status, key=lambda status: pior_componente[status])
+def buscar_equipamento(mac):
+    cursor.execute("SELECT id FROM equipamento WHERE mac_adress = %s", (mac,))
+    resultado = cursor.fetchone()
+    if resultado is None:
+        return None
+    return resultado[0]
 
 
-# COLETA
+# CADASTRO
 
-def coletar_cpu():
-    percentual = p.cpu_percent(interval=1)
+def cadastrar_maquina(mac):
+    if buscar_equipamento(mac) is not None:
+        print("\nEsta máquina já está cadastrada. Faça o login.")
+        return
+
+    cursor.execute("SELECT id, nome FROM hospital")
+    hospitais = cursor.fetchall()
+
+    if len(hospitais) == 0:
+        print("\nNenhum hospital cadastrado no banco.")
+        return
+
+    print("\nHospitais cadastrados:")
+    for hospital in hospitais:
+        print(f"{hospital[0]} - {hospital[1]}")
+
+    hospital_id = input("ID do hospital: ").strip()
+    if hospital_id not in [str(hospital[0]) for hospital in hospitais]:
+        print("\nHospital inválido.")
+        return
+
+    
+    # Dados que não mudam esses componentes ja estão fixos na máquina
+
+    nucleos_logicos = p.cpu_count(logical=True)
+    nucleos_fisicos = p.cpu_count(logical=False) or nucleos_logicos
     freq = p.cpu_freq()
-    frequencia = freq.current if freq else 0
-    nucleos = p.cpu_count()
-    return percentual, frequencia, nucleos
+    frequencia_maxima = freq.max if freq and freq.max else 0
+    memoria_total = f"{round(p.virtual_memory().total / GB, 1)} GB"
+    capacidade_total = f"{round(p.disk_usage('/').total / GB, 1)} GB"
 
-def coletar_ram():
-    ram = p.virtual_memory()
-    return ram.percent, ram.total / GB, ram.available / GB
-
-def coletar_disco():
-    disco = p.disk_usage("/")
-    return disco.percent, disco.total / GB, disco.free / GB
-
-def coletar_rede():
-    rede = p.net_io_counters()
-    download = round(rede.bytes_recv / 1000000, 1) 
-    upload = round(rede.bytes_sent / 1000000, 1)     
-    return download, upload
-
-def capturar_e_inserir():
-    agora = datetime.now()
-
-    perc_cpu, freq_cpu, nucleos = coletar_cpu()
-    perc_ram, ram_total, ram_disp = coletar_ram()
-    perc_disco, disco_total, disco_disp = coletar_disco()
-    download, upload = coletar_rede()
-
-    status_cpu = classificar_percentual(perc_cpu)
-    status_ram = classificar_percentual(perc_ram)
-    status_disco = classificar_percentual(perc_disco)
-    status_geral = pior_status([status_cpu, status_ram, status_disco])
-
-    print(f"\nCaptura em {agora.strftime('%d/%m/%Y %H:%M:%S')}")
-    print(f"CPU:   {perc_cpu}% | {freq_cpu:.0f} MHz | {nucleos} núcleos | {status_cpu}")
-    print(f"RAM:   {perc_ram}% | Disponível: {ram_disp:.2f} GB | {status_ram}")
-    print(f"Disco: {perc_disco}% | Disponível: {disco_disp:.2f} GB | {status_disco}")
-    print(f"Rede:  Download: {download} MB | Upload: {upload} MB")
-    print(f"Status geral: {status_geral}")
+    print("\nDados Capturados:")
+    print(f"MAC Address: {mac}")
+    print(f"Núcleos Físicos: {nucleos_fisicos}")
+    print(f"Núcleos Lógicos: {nucleos_logicos}")
+    print(f"Frequência Máxima: {frequencia_maxima} MHz")
+    print(f"Memória Total: {memoria_total}")
+    print(f"Capacidade de Disco: {capacidade_total}")
 
     comando = """
-        INSERT INTO registros
-        (id_equipamento,
-         cpu_percentual, cpu_frequencia, cpu_nucleos, cpu_status,
-         ram_percentual, ram_total, ram_disponivel, ram_status,
-         disco_percentual, disco_total, disco_disponivel, disco_status,
-         download_mb, upload_mb,
-         status_geral, data_hora)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        INSERT INTO equipamento
+        (mac_adress, nucleos_fisicos, nucleos_logicos, frequencia_maxima, memoria_total, capacidade_total, hospital_id)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
     """
-    valores = (ID_EQUIPAMENTO,
-               perc_cpu, freq_cpu, nucleos, status_cpu,
-               perc_ram, ram_total, ram_disp, status_ram,
-               perc_disco, disco_total, disco_disp, status_disco,
-               download, upload,
-               status_geral, agora)
+    cursor.execute(comando, (mac, nucleos_fisicos, nucleos_logicos, frequencia_maxima,
+                             memoria_total, capacidade_total, hospital_id))
 
-    cursor.execute(comando, valores)
-    conexao.commit()
+    print("\nMáquina cadastrada! Faça o login acessando a Opção 1.")
 
 
-def captura_continua():
-    print("\nCapturando dados. Pressione 'ctrl + c' para voltar ao menu.")
+# LEITURA DO COMPONENTE (o comando vem do banco)
+
+def ler_valor(biblioteca, comando, medida):
+    if biblioteca != "psutil":
+        raise Exception(f"biblioteca {biblioteca} não suportada")
+
+    # ex.: 'virtual_memory.percent' -> psutil.virtual_memory().percent
+    partes = comando.split(".")
+    funcao = getattr(p, partes[0])
+
+    if partes[0] in ARGUMENTOS:
+        valor = funcao(ARGUMENTOS[partes[0]])
+    else:
+        valor = funcao()
+
+    for atributo in partes[1:]:
+        valor = getattr(valor, atributo)
+
+    if hasattr(valor, "current"):    # cpu_freq devolve (current, min, max)
+        valor = valor.current
+
+    if medida == "GB":
+        valor = valor / GB
+    elif medida == "MB":
+        valor = valor / MB
+
+    return round(valor, 2)
+
+
+def pegar_parametro(id_equipamento, id_componente):
+    # a leitura só pode ser gravada se existir o parâmetro (equipamento + componente)
+    cursor.execute(
+        "SELECT id FROM parametro WHERE fkEquipamento = %s AND fkComponente = %s",
+        (id_equipamento, id_componente))
+    resultado = cursor.fetchone()
+    if resultado is not None:
+        return resultado[0]
+
+    cursor.execute("SELECT COALESCE(MAX(id), 0) + 1 FROM parametro")
+    novo_id = cursor.fetchone()[0]
+    cursor.execute(
+        "INSERT INTO parametro (id, fkEquipamento, fkComponente) VALUES (%s, %s, %s)",
+        (novo_id, id_equipamento, id_componente))
+    return novo_id
+
+
+def monitorar(id_equipamento, opcao):
+    id_componente, tipo, biblioteca, comando, medida = opcao
+    id_parametro = None
+
+    print(f"\nMonitorando {tipo}. Pressione 'ctrl + c' para voltar ao menu.")
     while True:
         try:
-            capturar_e_inserir()
-            print("Dados inseridos com sucesso!")
-            t.sleep(3)
+            valor = ler_valor(biblioteca, comando, medida)
+
+            if id_parametro is None:   # só cria o parâmetro depois que a leitura funcionou
+                id_parametro = pegar_parametro(id_equipamento, id_componente)
+
+            cursor.execute(
+                "INSERT INTO leitura (fkEquipamento, fkComponente, fkMetrica, valor, data_hora) "
+                "VALUES (%s, %s, %s, %s, NOW())",
+                (id_equipamento, id_componente, id_parametro, valor))
+
+            print(f"{tipo}: {valor} {medida}")
+            t.sleep(INTERVALO_CAPTURA)
         except KeyboardInterrupt:
-            conexao.rollback()
-            print("\nCaptura interrompida. Voltando ao menu...")
+            print("\nMonitoramento interrompido. Voltando ao menu...")
+            break
+        except Exception as erro:
+            print(f"\nNão foi possível monitorar {tipo}: {erro}")
             break
 
 
-def ver_cpu():
+# MENUS (Select pega os componentes que estão cadastrados no banco)
+
+def menu_opcoes(id_equipamento, componente):
     cursor.execute(
-        "SELECT id_registro, cpu_percentual, cpu_frequencia, cpu_nucleos, cpu_status, data_hora "
-        "FROM registros ORDER BY id_registro DESC LIMIT %s", (20,))
-    print("\nCPU")
-    for l in cursor.fetchall():
-        print(f"ID: {l[0]} | CPU: {l[1]}% | Frequência: {l[2]} MHz | Núcleos: {l[3]} | Status: {l[4]} | Timestamp: {l[5]}")
+        "SELECT c.id, c.tipo, c.biblioteca, c.comando, d.medida "
+        "FROM componente c JOIN dado d ON d.id = c.dado_id "
+        "WHERE SUBSTRING_INDEX(c.tipo, ' - ', 1) = %s ORDER BY c.id", (componente,))
+    opcoes = cursor.fetchall()
 
 
-def ver_ram():
-    cursor.execute(
-        "SELECT id_registro, ram_percentual, ram_total, ram_disponivel, ram_status, data_hora "
-        "FROM registros ORDER BY id_registro DESC LIMIT %s", (20,))
-    print("\nMemória")
-    for l in cursor.fetchall():
-        print(f"ID: {l[0]} | Uso: {l[1]}% | Total: {l[2]:.2f} GB | Disponível: {l[3]:.2f} GB | Status: {l[4]} | Timestamp: {l[5]}")
+    #Seleciona qual componente dos que estão cadastrados você quer monitorar
+
+    print(f"\n{componente} - o que monitorar")
+    for i in range(len(opcoes)):
+        print(f"{i + 1} - {opcoes[i][1]} ({opcoes[i][4]})")
+    print("0 - Voltar")
+
+    escolha = input("Digite o que você quer: ").strip()
+
+    if escolha == "0":
+        return
+    if escolha.isdigit() and 1 <= int(escolha) <= len(opcoes):
+        monitorar(id_equipamento, opcoes[int(escolha) - 1])
+    else:
+        print("\nOpção inválida.")
 
 
-def ver_disco():
-    cursor.execute(
-        "SELECT id_registro, disco_percentual, disco_total, disco_disponivel, disco_status, data_hora "
-        "FROM registros ORDER BY id_registro DESC LIMIT %s", (20,))
-    print("\nDisco")
-    for l in cursor.fetchall():
-        print(f"ID: {l[0]} | Uso: {l[1]}% | Total: {l[2]:.2f} GB | Disponível: {l[3]:.2f} GB | Status: {l[4]} | Timestamp: {l[5]}")
-
-
-def ver_rede():
-    cursor.execute(
-        "SELECT id_registro, download_mb, upload_mb, data_hora "
-        "FROM registros ORDER BY id_registro DESC LIMIT %s", (20,))
-    print("\nRedes")
-    for l in cursor.fetchall():
-        print(f"ID: {l[0]} | Download: {l[1]} MB | Upload: {l[2]} MB | Timestamp: {l[3]}")
-
-
-def ver_tudo():
-    cursor.execute(
-        "SELECT id_registro, cpu_percentual, cpu_status, ram_percentual, ram_status, "
-        "disco_percentual, disco_status, download_mb, upload_mb, status_geral, data_hora "
-        "FROM registros ORDER BY id_registro DESC LIMIT %s", (20,))
-    print("\nTodos os dados")
-    for l in cursor.fetchall():
-        print(f"ID: {l[0]} | CPU: {l[1]}% ({l[2]}) | RAM: {l[3]}% ({l[4]}) | Disco: {l[5]}% ({l[6]}) "
-              f"| Download: {l[7]} MB | Upload: {l[8]} MB | Status geral: {l[9]} | Timestamp: {l[10]}")
-
-
-def deletar_ultimos(qtd=5):
-    cursor.execute(f"DELETE FROM registros ORDER BY id_registro DESC LIMIT {int(qtd)}")
-    conexao.commit()
-    print(f"Os {qtd} últimos registros foram deletados.")
-
-
-def atualizar_ultimos(qtd=3):
-    cursor.execute(f"UPDATE registros SET data_hora = NOW() ORDER BY id_registro DESC LIMIT {int(qtd)}")
-    conexao.commit()
-    print(f"Os {qtd} últimos registros foram atualizados para a data atual.")
-
-
-# MENU
-
-def menu():
+def menu_componentes(id_equipamento):
     while True:
-        print("\nMENU")
-        print("1 - Capturar dados (contínuo)")
-        print("2 - Ver todos os dados")
-        print("3 - Ver CPU")
-        print("4 - Ver memória")
-        print("5 - Ver disco")
-        print("6 - Ver redes")
-        print("7 - Deletar os últimos 5 registros")
-        print("8 - Atualizar os 3 últimos registros para a data atual")
-        print("9 - Sair")
+        cursor.execute(
+            "SELECT SUBSTRING_INDEX(tipo, ' - ', 1) AS grupo FROM componente "
+            "GROUP BY grupo ORDER BY MIN(id)")
+        componentes = cursor.fetchall()
+
+        print("\nMENU - Componentes")
+        for i in range(len(componentes)):
+            print(f"{i + 1} - {componentes[i][0]}")
+        print("0 - Sair")
+        print("-----------------------------")
+
+        escolha = input("Qual componente você quer monitorar: ").strip()
+
+        if escolha == "0":
+            print("\nEncerrando programa...")
+            break
+        if escolha.isdigit() and 1 <= int(escolha) <= len(componentes):
+            menu_opcoes(id_equipamento, componentes[int(escolha) - 1][0])
+        else:
+            print("\nOpção inválida.")
+
+
+# Login e cadastro da maquina pelo MAC ADRESSS
+
+def menu_login(mac):
+    while True:
+        print("\nSeja Bem-Vindo ao Programa de Captura de Dados de Hardware!")
+        print(f"MAC desta máquina: {mac}")
+        print("1 - Login")
+        print("2 - Cadastrar máquina")
+        print("3 - Sair")
         print("-----------------------------")
 
         opcao = input("Digite o que você quer: ").strip()
 
         if opcao == "1":
-            captura_continua()
-            continue
+            id_equipamento = buscar_equipamento(mac)
+            if id_equipamento is not None:
+                print("\nAcesso Liberado!")
+                menu_componentes(id_equipamento)
+                break
+
+            #Caso a maquina não esteja cadastrada pede para cadastrar
+            print("\nMáquina não cadastrada.")
+            resposta = input("Deseja cadastrar agora? (s/n): ").strip().lower()
+            if resposta == "s":
+                cadastrar_maquina(mac)
         elif opcao == "2":
-            ver_tudo()
+            cadastrar_maquina(mac)
+
+            #Caso não queria ele fecha o programa
         elif opcao == "3":
-            ver_cpu()
-        elif opcao == "4":
-            ver_ram()
-        elif opcao == "5":
-            ver_disco()
-        elif opcao == "6":
-            ver_rede()
-        elif opcao == "7":
-            deletar_ultimos(5)
-        elif opcao == "8":
-            atualizar_ultimos(3)
-        elif opcao == "9":
-            print("\nEncerrando programa...")
+            print("\nPrograma Encerrado")
             break
         else:
-            print("\nOpção inválida, digite um número de 1 a 9.")
-            continue
-
-        input("\nPressione ENTER para voltar ao menu...")
-
+            print("\nOpção inválida, digite um número de 1 a 3.")
 
 try:
-    menu()
+    mac = pegar_mac()
+    if mac is None:
+        print("Não foi possível identificar o MAC address desta máquina.")
+    else:
+        menu_login(mac)
 finally:
     cursor.close()
     conexao.close()
