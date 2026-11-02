@@ -1,4 +1,5 @@
 import time as t
+import os
 
 import psutil as p
 from mysql.connector import connection
@@ -11,10 +12,10 @@ PERCENTUAL_ATENCAO = 0.9
 ARGUMENTOS = {"disk_usage": "/", "cpu_percent": 1}
 
 conexao = connection.MySQLConnection(
-    host="localhost",
-    user="aluno2",
-    password="sptech",
-    database="magnasync",
+    host=os.environ.get("DB_HOST", "localhost"),
+    user=os.environ.get("DB_USER", "aluno2"),
+    password=os.environ.get("DB_PASSWORD", ""),
+    database=os.environ.get("DB_DATABASE", "magnasync"),
 )
 conexao.autocommit = True   # assim o menu enxerga o que for inserido no banco sem reiniciar
 cursor = conexao.cursor()
