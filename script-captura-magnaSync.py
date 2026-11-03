@@ -329,11 +329,6 @@ def menu_principal(id_equipamento):
         print("\nNenhum componente da máquina pôde ser cadastrado.")
         return
 
-    for id_componente in ids:
-        cursor.execute(
-            "INSERT IGNORE INTO equipamento_componente (fkEquipamento, fkComponente) VALUES (%s, %s)",
-            (id_equipamento, id_componente))
-
     while True:
         print("\nMENU")
         print("1 - Monitorar componentes")
