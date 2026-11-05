@@ -10,6 +10,8 @@ MB = 1000000
 
 ARGUMENTOS = {"disk_usage": "/", "cpu_percent": 1}
 
+CATEGORIAS = {"Atenção": 1, "Crítico": 2, "Bloqueio": 3}   # ids da tabela categoria_alerta
+
 conexao = connection.MySQLConnection(
     host=os.environ.get("DB_HOST", "54.224.55.155"),
     user=os.environ.get("DB_USER", "aluno2"),
@@ -77,8 +79,8 @@ def detectar_componentes():
     return [
         ("Ram", round(p.virtual_memory().total / GB), "GB"),
         ("Disco", round(p.disk_usage("/").total / GB), "GB"),
-        ("Processador", nucleos_fisicos, "Núcleos Físicos"),
-        ("Processador", nucleos_logicos, "Núcleos Lógicos"),
+        ("Processador", nucleos_fisicos, "NucleosFisicos"),
+        ("Processador", nucleos_logicos, "NucleosLogicos"),
     ]
 
 
@@ -191,11 +193,29 @@ def pegar_parametro(id_equipamento, id_componente):
     return novo_id
 
 
+def classificar(tipo, valor):
+    if tipo == "Ram":
+        atencao, critico, bloqueio = 75, 85, 90
+    elif tipo == "Disco" or tipo == "Processador":
+        atencao, critico, bloqueio = 80, 90, 95
+    else:
+        return "Normal"
+
+    if valor >= bloqueio:
+        return "Bloqueio"
+    elif valor >= critico:
+        return "Crítico"
+    elif valor >= atencao:
+        return "Atenção"
+    return "Normal"
+
+
 def monitorar(id_equipamento, componente, opcao):
     id_componente = componente[0]
     id_parametro = None
     descricao, biblioteca, comando, medida = opcao[1], opcao[2], opcao[3], opcao[4]
     nome = f"{componente[2]} - {descricao}"
+    status_anterior = "Normal"
 
     print(f"\nMonitorando {nome}. Pressione 'ctrl + c' para voltar ao menu.")
     while True:
@@ -209,8 +229,18 @@ def monitorar(id_equipamento, componente, opcao):
                 "INSERT INTO leitura (fkEquipamento, fkComponente, fkMetrica, valor, data_hora) "
                 "VALUES (%s, %s, %s, %s, NOW())",
                 (id_equipamento, id_componente, id_parametro, valor))
+            id_leitura = cursor.lastrowid
 
-            print(f"{nome}: {valor} {medida}")
+            if medida == "%":    # a discretização só vale para percentual
+                status = classificar(componente[2], valor)
+                print(f"{nome}: {valor} {medida} | {status}")
+                if status != "Normal" and status != status_anterior:   # grava só quando o status muda
+                    cursor.execute(
+                        "INSERT INTO alerta (data_hora, leitura_id, categoria_alerta_id) VALUES (NOW(), %s, %s)",
+                        (id_leitura, CATEGORIAS[status]))
+                status_anterior = status
+            else:
+                print(f"{nome}: {valor} {medida}")
 
             t.sleep(INTERVALO_CAPTURA)
         except KeyboardInterrupt:
