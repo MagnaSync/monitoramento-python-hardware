@@ -7,14 +7,13 @@ from mysql.connector import connection
 INTERVALO_CAPTURA = 3     # segundos entre leituras
 GB = 1024 ** 3
 MB = 1000000
-PERCENTUAL_ATENCAO = 0.9
 
 ARGUMENTOS = {"disk_usage": "/", "cpu_percent": 1}
 
 conexao = connection.MySQLConnection(
-    host=os.environ.get("DB_HOST", "localhost"),
+    host=os.environ.get("DB_HOST", "54.224.55.155"),
     user=os.environ.get("DB_USER", "aluno2"),
-    password=os.environ.get("DB_PASSWORD", ""),
+    password=os.environ.get("DB_PASSWORD", "sptech"),
     database=os.environ.get("DB_DATABASE", "magnasync"),
 )
 conexao.autocommit = True   # assim o menu enxerga o que for inserido no banco sem reiniciar
@@ -119,27 +118,21 @@ def verificar_componentes():
     return ids
 
 
-def listar_componentes(id_equipamento, ids):
-    # componentes da máquina + a métrica cadastrada para ela (se tiver)
+def listar_componentes(ids):
     marcadores = ", ".join(["%s"] * len(ids))
     cursor.execute(
-        "SELECT c.id, t.id, t.tipo, c.valor, u.medida, pa.id, pa.metrica "
+        "SELECT c.id, t.id, t.tipo, c.valor, u.medida "
         "FROM componente c "
         "JOIN tipoComponente t ON t.id = c.fkTipo "
         "JOIN unidade u ON u.id = c.fkUnidade "
-        "LEFT JOIN parametro pa ON pa.fkComponente = c.id AND pa.fkEquipamento = %s "
-        f"WHERE c.id IN ({marcadores}) ORDER BY c.id", [id_equipamento] + ids)
+        f"WHERE c.id IN ({marcadores}) ORDER BY c.id", ids)
     return cursor.fetchall()
 
 
 def mostrar_componentes(componentes):
     for i in range(len(componentes)):
         c = componentes[i]
-        if c[5] is None:
-            metrica = "sem métrica"
-        else:
-            metrica = f"métrica: {c[6]}"
-        print(f"{i + 1} - {c[2]} - {c[3]} {c[4]} ({metrica})")
+        print(f"{i + 1} - {c[2]} - {c[3]} {c[4]}")
     print("0 - Voltar")
 
 
@@ -150,61 +143,6 @@ def escolher(lista):
     if escolha != "0":
         print("\nOpção inválida.")
     return None
-
-
-# MÉTRICAS (tabela parametro)
-
-def cadastrar_metrica(id_equipamento, ids):
-    componentes = listar_componentes(id_equipamento, ids)
-
-    print("\nCADASTRAR MÉTRICA - escolha o componente")
-    mostrar_componentes(componentes)
-    componente = escolher(componentes)
-    if componente is None:
-        return
-
-    if componente[5] is not None:
-        print("\nEste componente já tem métrica. Use a opção 'Alterar métrica'.")
-        return
-
-    metrica = input("Valor da métrica (número inteiro): ").strip()
-    if not metrica.isdigit():
-        print("\nA métrica precisa ser um número inteiro.")
-        return
-
-    cursor.execute("SELECT COALESCE(MAX(id), 0) + 1 FROM parametro")
-    novo_id = cursor.fetchone()[0]
-
-    cursor.execute(
-        "INSERT INTO parametro (id, fkEquipamento, fkComponente, metrica) VALUES (%s, %s, %s, %s)",
-        (novo_id, id_equipamento, componente[0], int(metrica)))
-
-    print(f"\nMétrica {metrica} cadastrada para {componente[2]} - {componente[3]} {componente[4]}.")
-
-
-def alterar_metrica(id_equipamento, ids):
-    componentes = [c for c in listar_componentes(id_equipamento, ids) if c[5] is not None]
-
-    if len(componentes) == 0:
-        print("\nNenhum componente tem métrica cadastrada ainda.")
-        return
-
-    print("\nALTERAR MÉTRICA - escolha o componente")
-    mostrar_componentes(componentes)
-    componente = escolher(componentes)
-    if componente is None:
-        return
-
-    metrica = input("Nova métrica (número inteiro(%)): ").strip()
-    if not metrica.isdigit():
-        print("\nA métrica precisa ser um número inteiro.")
-        return
-
-    cursor.execute(
-        "UPDATE parametro SET metrica = %s WHERE id = %s AND fkEquipamento = %s AND fkComponente = %s",
-        (int(metrica), componente[5], id_equipamento, componente[0]))
-
-    print(f"\nMétrica de {componente[2]} - {componente[3]} {componente[4]} alterada para {metrica}.")
 
 
 # Leitura do valor o comando vem do banco
@@ -236,52 +174,43 @@ def ler_valor(biblioteca, comando, medida):
     return round(valor, 2)
 
 
-def classificar(valor, metrica):
-    if valor > metrica:
-        return "Crítico"
-    elif valor >= metrica * PERCENTUAL_ATENCAO:
-        return "Atenção"
-    return "Normal"
-
-
-def gravar_alerta(id_leitura, status):
-    cursor.execute("SELECT id FROM categoria_alerta WHERE classificacao = %s", (status,))
-    categoria = cursor.fetchone()
-    if categoria is None:
-        print(f"A categoria de alerta '{status}' não existe no banco.")
-        return
+def pegar_parametro(id_equipamento, id_componente):
+    # a tabela leitura exige uma linha em parametro (máquina + componente); aqui ela é criada sozinha, sem métrica
     cursor.execute(
-        "INSERT INTO alerta (data_hora, leitura_id, categoria_alerta_id) VALUES (NOW(), %s, %s)",
-        (id_leitura, categoria[0]))
+        "SELECT id FROM parametro WHERE fkEquipamento = %s AND fkComponente = %s",
+        (id_equipamento, id_componente))
+    resultado = cursor.fetchone()
+    if resultado is not None:
+        return resultado[0]
+
+    cursor.execute("SELECT COALESCE(MAX(id), 0) + 1 FROM parametro")
+    novo_id = cursor.fetchone()[0]
+    cursor.execute(
+        "INSERT INTO parametro (id, fkEquipamento, fkComponente) VALUES (%s, %s, %s)",
+        (novo_id, id_equipamento, id_componente))
+    return novo_id
+
 
 def monitorar(id_equipamento, componente, opcao):
     id_componente = componente[0]
-    id_parametro = componente[5]
-    metrica = componente[6]
+    id_parametro = None
     descricao, biblioteca, comando, medida = opcao[1], opcao[2], opcao[3], opcao[4]
     nome = f"{componente[2]} - {descricao}"
-    status_anterior = "Normal"
 
     print(f"\nMonitorando {nome}. Pressione 'ctrl + c' para voltar ao menu.")
     while True:
         try:
             valor = ler_valor(biblioteca, comando, medida)
 
+            if id_parametro is None:   # só cria o parâmetro depois que a leitura funcionou
+                id_parametro = pegar_parametro(id_equipamento, id_componente)
+
             cursor.execute(
                 "INSERT INTO leitura (fkEquipamento, fkComponente, fkMetrica, valor, data_hora) "
                 "VALUES (%s, %s, %s, %s, NOW())",
                 (id_equipamento, id_componente, id_parametro, valor))
-            id_leitura = cursor.lastrowid
 
             print(f"{nome}: {valor} {medida}")
-
-            if medida == "%" and metrica is not None: #O alerta só funciona para percentual 
-                status = classificar(valor, metrica)
-                if status != "Normal":
-                    print(f"* ALERTA {status.upper()}: {valor}% (métrica: {metrica}%) *")
-                    if status != status_anterior:     # grava só quando o status muda
-                        gravar_alerta(id_leitura, status)
-                status_anterior = status
 
             t.sleep(INTERVALO_CAPTURA)
         except KeyboardInterrupt:
@@ -293,16 +222,12 @@ def monitorar(id_equipamento, componente, opcao):
 
 
 def menu_monitorar(id_equipamento, ids):
-    componentes = listar_componentes(id_equipamento, ids)
+    componentes = listar_componentes(ids)
 
     print("\nMONITORAR - escolha o componente")
     mostrar_componentes(componentes)
     componente = escolher(componentes)
     if componente is None:
-        return
-
-    if componente[5] is None:
-        print("\nCadastre a métrica deste componente antes de monitorar (opção 2).")
         return
 
     cursor.execute(
@@ -332,9 +257,7 @@ def menu_principal(id_equipamento):
     while True:
         print("\nMENU")
         print("1 - Monitorar componentes")
-        print("2 - Cadastrar métrica")
-        print("3 - Alterar métrica")
-        print("4 - Sair")
+        print("2 - Sair")
         print("-----------------------------")
 
         opcao = input("Digite o que você quer: ").strip()
@@ -342,14 +265,10 @@ def menu_principal(id_equipamento):
         if opcao == "1":
             menu_monitorar(id_equipamento, ids)
         elif opcao == "2":
-            cadastrar_metrica(id_equipamento, ids)
-        elif opcao == "3":
-            alterar_metrica(id_equipamento, ids)
-        elif opcao == "4":
             print("\nEncerrando programa...")
             break
         else:
-            print("\nOpção inválida, digite um número de 1 a 4.")
+            print("\nOpção inválida, digite 1 ou 2.")
 
 
 # LOGIN / CADASTRO
