@@ -1,6 +1,13 @@
 import time as t
 import os
 os.system("cls")
+from dotenv import load_dotenv
+load_dotenv()
+
+db_host = os.getenv("DB_HOST")
+db_user = os.getenv("DB_USER")
+db_password = os.getenv("DB_PASSWORD")
+db_database = os.getenv("DB_DATABASE")
 
 import psutil as p
 from mysql.connector import connection
@@ -13,10 +20,10 @@ PERCENTUAL_ATENCAO = 0.9
 ARGUMENTOS = {"disk_usage": "/", "cpu_percent": 1}
 
 conexao = connection.MySQLConnection(
-    host=os.environ.get("DB_HOST", "localhost"),
-    user=os.environ.get("DB_USER", "andre"),
-    password=os.environ.get("DB_PASSWORD", "123456"),
-    database=os.environ.get("DB_DATABASE", "magnasync"),
+    host=os.environ.get("DB_HOST", db_host),
+    user=os.environ.get("DB_USER", db_user),
+    password=os.environ.get("DB_PASSWORD", db_password),
+    database=os.environ.get("DB_DATABASE", db_database),
 )
 conexao.autocommit = True   # assim o menu enxerga o que for inserido no banco sem reiniciar
 cursor = conexao.cursor()
