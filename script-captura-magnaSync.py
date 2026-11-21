@@ -13,7 +13,7 @@ ARGUMENTOS = {"disk_usage": "/", "cpu_percent": 1}
 CATEGORIAS = {"Atenção": 1, "Crítico": 2, "Bloqueio": 3}   # ids da tabela categoria_alerta
 
 conexao = connection.MySQLConnection(
-    host=os.environ.get("DB_HOST", "54.224.55.155"),
+    host=os.environ.get("DB_HOST", "localhost"),
     user=os.environ.get("DB_USER", "aluno2"),
     password=os.environ.get("DB_PASSWORD", "sptech"),
     database=os.environ.get("DB_DATABASE", "magnasync"),
@@ -261,9 +261,12 @@ def menu_monitorar(id_equipamento, ids):
         return
 
     cursor.execute(
-        "SELECT cm.id, cm.descricao, cm.biblioteca, cm.comando, u.medida "
-        "FROM comandos cm JOIN unidade u ON u.id = cm.fkUnidade "
-        "WHERE cm.fkTipo = %s ORDER BY cm.id", (componente[1],))
+        "SELECT cm.id, cm.descricao, cm.biblioteca, cm.comando, "
+        "IF(cm.comando LIKE '%%percent%%', '%', u.medida) AS medida "
+        "FROM comandos cm "
+        "JOIN componente c ON c.id = %s "
+        "JOIN unidade u ON u.id = c.fkUnidade "
+        "WHERE cm.fkTipo = %s ORDER BY cm.id", (componente[0], componente[1]))
     opcoes = cursor.fetchall()
 
     print(f"\n{componente[2]} - o que monitorar")
