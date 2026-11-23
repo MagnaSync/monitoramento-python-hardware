@@ -4,7 +4,7 @@ import os
 import psutil as p
 from mysql.connector import connection
 
-INTERVALO_CAPTURA = 3     # segundos entre leituras
+INTERVALO_CAPTURA = 60     # segundos entre leituras
 GB = 1024 ** 3
 MB = 1000000
 
